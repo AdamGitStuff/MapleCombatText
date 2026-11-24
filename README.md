@@ -6,6 +6,9 @@ Replaces Erenshor's damage popups (`DmgPop.LoadInfo`) with MapleStory-style comb
 - Critical hits: pink-red digits with a spiky orange "critical" burst behind the first digit
 - Damage you take: violet digits
 - `MISS` for 0-damage hits
+- Healing numbers (green, with a `+`) for heal spells, lifesteal and heal-over-time; natural regen is not shown
+- **ShowDamage** / **ShowHealing** switches to hide either kind
+- **Colors** section with a colour picker for the top and bottom of each number type (damage, crit, taken, healing)
 - Optional black outline (**BlackOutline** setting) instead of the default tinted brown/red/purple outline
 - Pop-in, short hold, then float up and fade
 - Rapid hits on the same target stack upward like multi-line skills
@@ -13,7 +16,7 @@ Replaces Erenshor's damage popups (`DmgPop.LoadInfo`) with MapleStory-style comb
 ## Install
 
 1. Install Lunaris for Erenshor (the plugin loader).
-2. Download `MapleCombatText-v1.0.0.zip` from the Releases page.
+2. Download `MapleCombatText-v1.1.0.zip` from the Releases page.
 3. Put `MapleCombatText.dll` in `<Erenshor>\plugins\`. It is a single file; the digit images are built in.
 4. Start the game. Settings are in the Lunaris config UI under MapleCombatText.
 
@@ -41,9 +44,7 @@ Each digit set needs all ten files to be used.
 
 Toggle with the **MapleDigits** setting (on by default, switches instantly). Off = the font-based look, or your own **Skin** if one is set.
 
-`tools/make_skin.py` generates MapleStory-style bubbly digits (Comic Sans Bold, fattened and rounded, glossy gradient, dark outline):
+`tools/make_skin.py skins/MapleLayers` regenerates the glyphs (Comic Sans Bold, fattened and rounded). Each glyph (0-9, MISS, +) is three layers that get embedded into the DLL at build time:
+`<g>_line.png` (outline, tinted with the outline colour), `<g>_face.png` (tinted with the chosen colour gradient) and `<g>_gloss.png` (highlight, untinted).
 
-    python tools/make_skin.py skins/Maple
-    python tools/make_skin.py skins/MapleBlack --black
-
-The PNGs in `skins/` are embedded into the DLL at build time. For your own custom Skin folder, a `<Skin>Black` folder next to it is used automatically while **BlackOutline** is on.
+Custom skins (single images per digit) can also include `heal_0..9.png` and `<prefix>_plus.png`. A `<Skin>Black` folder next to a custom skin is used while **BlackOutline** is on.

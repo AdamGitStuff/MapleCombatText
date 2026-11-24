@@ -13,6 +13,18 @@ namespace MapleCombatText
         public bool Enabled = true;
 
         [ConfigSection("General")]
+        [ConfigDescription("Show damage numbers (dealt and taken). Turn off to hide them completely.")]
+        public bool ShowDamage = true;
+
+        [ConfigSection("General")]
+        [ConfigDescription("Show healing numbers when anyone is healed (spells, lifesteal, heal-over-time).")]
+        public bool ShowHealing = true;
+
+        [ConfigSection("General")]
+        [ConfigDescription("Put a '+' in front of healing numbers.")]
+        public bool HealPlusSign = true;
+
+        [ConfigSection("General")]
         [ConfigDescription("Show 'MISS' when a hit does 0 damage.")]
         public bool ShowMiss = true;
 
@@ -44,7 +56,7 @@ namespace MapleCombatText
         public bool MapleDigits = true;
 
         [ConfigSection("Look")]
-        [ConfigDescription("Use a black outline around the numbers instead of the dark brown/red/purple tint of each colour.")]
+        [ConfigDescription("Use a black outline around the numbers instead of a dark shade of each number's colour.")]
         public bool BlackOutline = false;
 
         [ConfigSection("Look")]
@@ -54,6 +66,39 @@ namespace MapleCombatText
         [ConfigSection("Look")]
         [ConfigDescription("Your own skin folder inside plugins/MapleCombatText/skins/ (used when MapleDigits is off). Leave blank for the font-based look. Takes effect after restart.")]
         public string Skin = "";
+
+        // Each number is a top-to-bottom gradient between two colours.
+        [ConfigSection("Colors")]
+        [ConfigDescription("Your damage: colour at the top of the digits.")]
+        public Color DamageTop = new Color(1.00f, 0.95f, 0.50f);
+
+        [ConfigSection("Colors")]
+        [ConfigDescription("Your damage: colour at the bottom of the digits.")]
+        public Color DamageBottom = new Color(0.96f, 0.36f, 0.05f);
+
+        [ConfigSection("Colors")]
+        [ConfigDescription("Critical hits: colour at the top of the digits.")]
+        public Color CritTop = new Color(1.00f, 0.76f, 0.89f);
+
+        [ConfigSection("Colors")]
+        [ConfigDescription("Critical hits: colour at the bottom of the digits.")]
+        public Color CritBottom = new Color(0.86f, 0.08f, 0.45f);
+
+        [ConfigSection("Colors")]
+        [ConfigDescription("Damage taken: colour at the top of the digits.")]
+        public Color TakenTop = new Color(0.91f, 0.80f, 1.00f);
+
+        [ConfigSection("Colors")]
+        [ConfigDescription("Damage taken: colour at the bottom of the digits.")]
+        public Color TakenBottom = new Color(0.45f, 0.18f, 0.86f);
+
+        [ConfigSection("Colors")]
+        [ConfigDescription("Healing: colour at the top of the digits.")]
+        public Color HealTop = new Color(0.80f, 1.00f, 0.66f);
+
+        [ConfigSection("Colors")]
+        [ConfigDescription("Healing: colour at the bottom of the digits.")]
+        public Color HealBottom = new Color(0.12f, 0.70f, 0.20f);
 
         [ConfigSection("Animation")]
         [ConfigDescription("Seconds a number stays still before it starts floating away.")]
@@ -81,7 +126,7 @@ namespace MapleCombatText
         public float SortOrder = -5f;
     }
 
-    [LunarisPlugin("MapleCombatText", "1.0.0", "Adam", "MapleStory-style damage numbers")]
+    [LunarisPlugin("MapleCombatText", "1.1.0", "Adam", "MapleStory-style damage numbers")]
     public class MapleCombatTextPlugin : LunarisPlugin
     {
         internal static MapleCombatTextPlugin Instance;
@@ -118,10 +163,73 @@ namespace MapleCombatText
                     _harmony.Patch(reduce, prefix: new HarmonyMethod(typeof(MapleCombatTextPlugin), nameof(ReduceHPPrefix)));
                 else
                     Warn("Stats.ReduceHP not found; all hits will be styled as yours.");
+                PatchHeals();
                 _started = true;
                 Info("MapleCombatText loaded.");
             }
             catch (Exception e) { Error("Failed to start: " + e); }
+        }
+
+        // ---- healing. Erenshor has no heal popups, so we watch Stats.CurrentHP around its heal paths:
+        // HealMe(int) / HealMe(Spell,int,bool,bool,Character) for direct heals and lifesteal, and
+        // TickEffects for heal-over-time (which writes CurrentHP itself). Natural regen is not shown.
+        private void PatchHeals()
+        {
+            var pre = new HarmonyMethod(typeof(MapleCombatTextPlugin), nameof(HealPrefix));
+            int n = 0;
+            foreach (var m in typeof(Stats).GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
+            {
+                if (m.Name == "HealMe")
+                {
+                    var post = m.GetParameters().Length == 5 ? nameof(HealSpellPostfix) : nameof(HealPostfix);
+                    _harmony.Patch(m, prefix: pre, postfix: new HarmonyMethod(typeof(MapleCombatTextPlugin), post));
+                    n++;
+                }
+                else if (m.Name == "TickEffects" && m.GetParameters().Length == 0)
+                {
+                    _harmony.Patch(m, prefix: new HarmonyMethod(typeof(MapleCombatTextPlugin), nameof(TickPrefix)),
+                        postfix: new HarmonyMethod(typeof(MapleCombatTextPlugin), nameof(TickPostfix)));
+                    n++;
+                }
+            }
+            if (n == 0) Warn("No heal methods found; healing numbers disabled.");
+        }
+
+        private static int _tickDepth; // inside TickEffects: let its postfix report the net heal once
+
+        private static void HealPrefix(Stats __instance, out int __state) { __state = __instance != null ? __instance.CurrentHP : 0; }
+
+        private static void HealPostfix(Stats __instance, int __state)
+        {
+            if (_tickDepth == 0) ShowHeal(__instance, __state, false, null);
+        }
+
+        // HealMe(Spell spell, int amt, bool isCrit, bool isMana, Character source)
+        private static void HealSpellPostfix(Stats __instance, int __state, bool __2, Character __4)
+        {
+            if (_tickDepth == 0) ShowHeal(__instance, __state, __2, __4);
+        }
+
+        private static void TickPrefix(Stats __instance, out int __state) { _tickDepth++; __state = __instance != null ? __instance.CurrentHP : 0; }
+
+        private static void TickPostfix(Stats __instance, int __state)
+        {
+            _tickDepth = Mathf.Max(0, _tickDepth - 1);
+            ShowHeal(__instance, __state, false, null);
+        }
+
+        private static void ShowHeal(Stats st, int before, bool crit, Character source)
+        {
+            if (!Cfg.Enabled || !Cfg.ShowHealing || st == null) return;
+            try
+            {
+                int healed = st.CurrentHP - before;
+                if (healed <= 0) return;
+                var target = st.transform;
+                bool mine = target.name == "Player" || source == null || source.transform.name == "Player";
+                MapleText.SpawnHeal(healed, crit, target, mine);
+            }
+            catch (Exception e) { Error("Heal popup failed: " + e.Message); }
         }
 
         // Stats.ReduceHP(int dmg, DamageType type, bool involvesPlayer, bool isCritical) is the only
@@ -137,6 +245,11 @@ namespace MapleCombatText
             {
                 bool mine = _involvesPlayer;
                 _involvesPlayer = true;
+                if (!Cfg.ShowDamage)
+                {
+                    if (__instance != null) __instance.gameObject.SetActive(false);
+                    return false;
+                }
                 bool shown = MapleText.Spawn(__0, __1, __3, mine, __instance);
                 if (!shown && __0 > 0) return true; // couldn't draw it ourselves, let vanilla show it
                 if (__instance != null) __instance.gameObject.SetActive(false);

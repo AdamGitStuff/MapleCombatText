@@ -4,35 +4,75 @@ using System.IO;
 using System.Text;
 using TMPro;
 using UnityEngine;
-using UnityEngine.TextCore.LowLevel;
 using UnityEngine.UI;
 using Object = UnityEngine.Object;
 
 namespace MapleCombatText
 {
-    internal enum Style { Normal = 0, Crit = 1, Taken = 2 }
+    internal enum Style { Normal = 0, Crit = 1, Taken = 2, Heal = 3 }
 
     internal sealed class StyleDef
     {
-        public Color Top, Bottom, Outline;
+        public string Prefix;       // custom skin file prefix (normal/crit/taken/heal)
         public float Size;          // font size in 1080p canvas units
-        public Material Mat;        // TMP material (outline/underlay baked in)
+        public Material Mat;        // TMP material for the font look (outline/underlay baked in)
+        public Color MatOutline;    // outline colour currently set on Mat
         public readonly SpriteSet Custom = new SpriteSet(); // from the Skin setting
-        public readonly SpriteSet Maple = new SpriteSet();  // built-in bubbly digits (skins/Maple)
-
-        // Bubbly digits win when MapleDigits is on; otherwise a custom Skin; otherwise null = font.
-        private SpriteSet Cur => MapleCombatTextPlugin.Cfg.MapleDigits && Maple.Digits != null ? Maple : Custom;
-        public Sprite[] CurDigits => Cur.CurDigits;
-        public Sprite CurMiss => Cur.CurMiss;
     }
 
+    // A user skin: one finished image per digit, drawn as-is.
     internal sealed class SpriteSet
     {
-        public Sprite[] Digits, DigitsBlack; // 0-9, plus black-outline variant from "<folder>Black"
-        public Sprite Miss, MissBlack;
+        public Sprite[] Digits, DigitsBlack; // 0-9, plus black-outline variant from "<Skin>Black"
+        public Sprite Miss, MissBlack, Plus;
 
         public Sprite[] CurDigits => MapleCombatTextPlugin.Cfg.BlackOutline && DigitsBlack != null ? DigitsBlack : Digits;
         public Sprite CurMiss => MapleCombatTextPlugin.Cfg.BlackOutline && MissBlack != null ? MissBlack : Miss;
+    }
+
+    // The built-in bubbly glyphs: three layers each, so they can be recoloured to anything.
+    internal sealed class MapleGlyphs
+    {
+        public const int Miss = 10, Plus = 11, Count = 12;
+        public readonly Sprite[] Line = new Sprite[Count];  // white outline + black shadow, tinted with the outline colour
+        public readonly Sprite[] Face = new Sprite[Count];  // light grey face, tinted with the colour gradient
+        public readonly Sprite[] Gloss = new Sprite[Count]; // highlight/edge, untinted
+        public bool Complete;
+    }
+
+    // One character in the image row: up to three stacked Images.
+    internal sealed class Glyph
+    {
+        public RectTransform Rt;
+        public Image Line, Face, Gloss;
+        public VGradient Grad;
+    }
+
+    // Vertical colour gradient for a UI Image (multiplies the vertex colours).
+    internal sealed class VGradient : BaseMeshEffect
+    {
+        public Color Top = Color.white, Bottom = Color.white;
+
+        public override void ModifyMesh(VertexHelper vh)
+        {
+            if (!IsActive() || vh.currentVertCount == 0) return;
+            var v = new UIVertex();
+            float min = float.MaxValue, max = float.MinValue;
+            for (int i = 0; i < vh.currentVertCount; i++)
+            {
+                vh.PopulateUIVertex(ref v, i);
+                min = Mathf.Min(min, v.position.y);
+                max = Mathf.Max(max, v.position.y);
+            }
+            float span = Mathf.Max(0.0001f, max - min);
+            for (int i = 0; i < vh.currentVertCount; i++)
+            {
+                vh.PopulateUIVertex(ref v, i);
+                Color c = Color.Lerp(Bottom, Top, (v.position.y - min) / span) * (Color)v.color;
+                v.color = c;
+                vh.SetUIVertex(v, i);
+            }
+        }
     }
 
     internal sealed class Popup
@@ -41,7 +81,7 @@ namespace MapleCombatText
         public CanvasGroup Group;
         public TextMeshProUGUI Text;
         public RectTransform ImageRow;
-        public readonly List<Image> Images = new List<Image>();
+        public readonly List<Glyph> Glyphs = new List<Glyph>();
         public Image Burst;
 
         public bool Active;
@@ -56,14 +96,13 @@ namespace MapleCombatText
 
     internal static class MapleText
     {
-        private static MonoBehaviour _host;
         private static Canvas _canvas;
         private static RectTransform _canvasRT;
         private static bool _assetsReady;
-        private static bool _appliedBlackOutline;
         private static TMP_FontAsset _font;
         private static Sprite _burstSprite;
-        private static readonly StyleDef[] Styles = new StyleDef[3];
+        private static readonly MapleGlyphs Maple = new MapleGlyphs();
+        private static readonly StyleDef[] Styles = new StyleDef[4];
         private static readonly List<Popup> Pool = new List<Popup>();
         private static readonly StringBuilder Sb = new StringBuilder(128);
 
@@ -71,23 +110,33 @@ namespace MapleCombatText
 
         public static void Init(MonoBehaviour host)
         {
-            _host = host;
+            Styles[(int)Style.Normal] = new StyleDef { Prefix = "normal", Size = 30f };
+            Styles[(int)Style.Crit] = new StyleDef { Prefix = "crit", Size = 36f };
+            Styles[(int)Style.Taken] = new StyleDef { Prefix = "taken", Size = 30f };
+            Styles[(int)Style.Heal] = new StyleDef { Prefix = "heal", Size = 30f };
+        }
 
-            Styles[(int)Style.Normal] = new StyleDef
+        // ---------------------------------------------------------------- colours
+
+        private static void GetColors(Style s, out Color top, out Color bottom)
+        {
+            switch (s)
             {
-                Top = new Color(1.00f, 0.94f, 0.38f), Bottom = new Color(1.00f, 0.50f, 0.00f),
-                Outline = new Color(0.32f, 0.11f, 0.00f), Size = 30f
-            };
-            Styles[(int)Style.Crit] = new StyleDef
-            {
-                Top = new Color(1.00f, 0.66f, 0.74f), Bottom = new Color(0.96f, 0.04f, 0.24f),
-                Outline = new Color(0.30f, 0.00f, 0.06f), Size = 36f
-            };
-            Styles[(int)Style.Taken] = new StyleDef
-            {
-                Top = new Color(0.90f, 0.75f, 1.00f), Bottom = new Color(0.56f, 0.22f, 0.96f),
-                Outline = new Color(0.16f, 0.00f, 0.32f), Size = 30f
-            };
+                case Style.Crit: top = Cfg.CritTop; bottom = Cfg.CritBottom; break;
+                case Style.Taken: top = Cfg.TakenTop; bottom = Cfg.TakenBottom; break;
+                case Style.Heal: top = Cfg.HealTop; bottom = Cfg.HealBottom; break;
+                default: top = Cfg.DamageTop; bottom = Cfg.DamageBottom; break;
+            }
+        }
+
+        // Outline: black, or a very dark shade of the number's bottom colour.
+        private static Color OutlineFor(Style s)
+        {
+            if (Cfg.BlackOutline) return Color.black;
+            GetColors(s, out _, out var bottom);
+            var c = Color.Lerp(bottom, Color.black, 0.72f);
+            c.a = 1f;
+            return c;
         }
 
         // ---------------------------------------------------------------- setup
@@ -112,24 +161,27 @@ namespace MapleCombatText
             if (_assetsReady) return;
             _assetsReady = true;
 
+            // The game's damage-number font. A heal can come before any hit, so also look for the prefab.
+            if (source == null)
+                foreach (var d in Resources.FindObjectsOfTypeAll<DmgPop>())
+                    if (d != null && d.Num != null && d.Num.font != null) { source = d; break; }
             if (source != null && source.Num != null) _font = source.Num.font;
             if (_font == null) _font = TMP_Settings.defaultFontAsset;
 
-            foreach (var s in Styles) s.Mat = BuildMaterial(s);
-            ApplyOutlineColors();
+            for (int i = 0; i < Styles.Length; i++) Styles[i].Mat = BuildMaterial(Styles[i]);
+            RefreshMaterials();
             _burstSprite = BuildBurstSprite();
-            LoadSkin("Maple", true);
-            LoadSkin(Cfg.Skin, false);
+            LoadMapleGlyphs();
+            LoadSkin(Cfg.Skin);
         }
 
         private static Material BuildMaterial(StyleDef s)
         {
             if (_font == null || _font.material == null) return null;
-            var m = new Material(_font.material) { name = "MapleCombatText " + s.Size };
+            var m = new Material(_font.material) { name = "MapleCombatText " + s.Prefix };
             SetF(m, "_FaceDilate", 0.18f);
             SetF(m, "_OutlineWidth", 0.30f);
             SetF(m, "_OutlineSoftness", 0.02f);
-            if (m.HasProperty("_OutlineColor")) m.SetColor("_OutlineColor", s.Outline);
             m.EnableKeyword("OUTLINE_ON");
             m.EnableKeyword("UNDERLAY_ON");
             if (m.HasProperty("_UnderlayColor")) m.SetColor("_UnderlayColor", new Color(0, 0, 0, 0.55f));
@@ -140,14 +192,17 @@ namespace MapleCombatText
             return m;
         }
 
-        // Re-tints every style's outline when the BlackOutline option is toggled (no restart needed).
-        private static void ApplyOutlineColors()
+        // Keeps the font look's outline colours in step with the settings (cheap; runs every frame).
+        private static void RefreshMaterials()
         {
-            _appliedBlackOutline = Cfg.BlackOutline;
-            foreach (var s in Styles)
+            for (int i = 0; i < Styles.Length; i++)
             {
+                var s = Styles[i];
                 if (s.Mat == null || !s.Mat.HasProperty("_OutlineColor")) continue;
-                s.Mat.SetColor("_OutlineColor", _appliedBlackOutline ? Color.black : s.Outline);
+                var want = OutlineFor((Style)i);
+                if (want == s.MatOutline) continue;
+                s.MatOutline = want;
+                s.Mat.SetColor("_OutlineColor", want);
             }
         }
 
@@ -189,57 +244,27 @@ namespace MapleCombatText
             return Sprite.Create(tex, new Rect(0, 0, N, N), new Vector2(0.5f, 0.5f), 100f);
         }
 
-        // ---------------------------------------------------------------- custom skins
+        // ---------------------------------------------------------------- built-in glyphs
 
-        // plugins/MapleCombatText/skins/<Skin>/normal_0..9.png, crit_0..9.png, taken_0..9.png,
-        // normal_miss.png, taken_miss.png, crit_effect.png  (any subset)
-        // If a sibling folder "<Skin>Black" exists it is used while BlackOutline is on.
-        // Built-in "Maple" digits are embedded in the DLL (resources skins/Maple/*.png and skins/MapleBlack/*.png),
-        // so the mod is a single file. A custom Skin is read from plugins/MapleCombatText/skins/<Skin>/.
-        // If a sibling "<name>Black" set exists it is used while BlackOutline is on.
-        private static void LoadSkin(string skin, bool builtIn)
+        // Embedded resources maple/<g>_line.png, _face.png, _gloss.png for g = 0..9, miss, plus.
+        private static void LoadMapleGlyphs()
         {
-            if (string.IsNullOrWhiteSpace(skin)) return;
-            skin = skin.Trim();
-            Func<string, string, byte[]> read;
-            string where;
-            if (builtIn)
+            bool ok = true;
+            for (int g = 0; g < MapleGlyphs.Count; g++)
             {
-                read = ReadResource;
-                where = "embedded resources";
+                string name = g < 10 ? g.ToString() : g == MapleGlyphs.Miss ? "miss" : "plus";
+                Maple.Line[g] = LoadSprite(ReadResource("maple/" + name + "_line.png"), name);
+                Maple.Face[g] = LoadSprite(ReadResource("maple/" + name + "_face.png"), name);
+                Maple.Gloss[g] = LoadSprite(ReadResource("maple/" + name + "_gloss.png"), name);
+                ok &= Maple.Line[g] != null && Maple.Face[g] != null && Maple.Gloss[g] != null;
             }
-            else
-            {
-                string root = Path.Combine(Path.Combine(Path.Combine(Path.GetDirectoryName(Application.dataPath), "plugins"), "MapleCombatText"), "skins");
-                if (!Directory.Exists(Path.Combine(root, skin))) { MapleCombatTextPlugin.Warn("Skin folder not found: " + Path.Combine(root, skin)); return; }
-                read = (folder, file) => { var f = Path.Combine(Path.Combine(root, folder), file); return File.Exists(f) ? File.ReadAllBytes(f) : null; };
-                where = root;
-            }
-
-            string black = skin + "Black";
-            bool hasBlack = false;
-            string[] prefixes = { "normal", "crit", "taken" };
-            for (int s = 0; s < 3; s++)
-            {
-                var set = builtIn ? Styles[s].Maple : Styles[s].Custom;
-                set.Digits = LoadDigits(read, skin, prefixes[s]);
-                set.Miss = LoadSprite(read(skin, $"{prefixes[s]}_miss.png"), skin + "/" + prefixes[s] + "_miss.png");
-                set.DigitsBlack = LoadDigits(read, black, prefixes[s]);
-                set.MissBlack = LoadSprite(read(black, $"{prefixes[s]}_miss.png"), black + "/" + prefixes[s] + "_miss.png");
-                hasBlack |= set.DigitsBlack != null;
-            }
-            if (Styles[0].Maple.Digits == null && builtIn) MapleCombatTextPlugin.Warn("Built-in Maple digits missing from the DLL.");
-            if (!builtIn)
-            {
-                var fx = LoadSprite(read(skin, "crit_effect.png"), skin + "/crit_effect.png");
-                if (fx != null) _burstSprite = fx;
-            }
-            MapleCombatTextPlugin.Info("Loaded skin '" + skin + "' from " + where + (hasBlack ? " (+ black outline variant)" : ""));
+            Maple.Complete = ok;
+            if (!ok) MapleCombatTextPlugin.Warn("Built-in Maple glyphs missing from the DLL; using the font look.");
         }
 
-        private static byte[] ReadResource(string folder, string file)
+        private static byte[] ReadResource(string name)
         {
-            using (var st = typeof(MapleText).Assembly.GetManifestResourceStream("skins/" + folder + "/" + file))
+            using (var st = typeof(MapleText).Assembly.GetManifestResourceStream(name))
             {
                 if (st == null) return null;
                 var ms = new MemoryStream();
@@ -248,12 +273,44 @@ namespace MapleCombatText
             }
         }
 
-        private static Sprite[] LoadDigits(Func<string, string, byte[]> read, string folder, string prefix)
+        // ---------------------------------------------------------------- custom skins
+
+        // plugins/MapleCombatText/skins/<Skin>/normal_0..9.png, crit_*, taken_*, heal_*, <prefix>_miss.png,
+        // <prefix>_plus.png, crit_effect.png (any subset). A sibling "<Skin>Black" folder is used while BlackOutline is on.
+        private static void LoadSkin(string skin)
+        {
+            if (string.IsNullOrWhiteSpace(skin)) return;
+            skin = skin.Trim();
+            string root = Path.Combine(Path.Combine(Path.Combine(Path.GetDirectoryName(Application.dataPath), "plugins"), "MapleCombatText"), "skins");
+            string dir = Path.Combine(root, skin), blackDir = Path.Combine(root, skin + "Black");
+            if (!Directory.Exists(dir)) { MapleCombatTextPlugin.Warn("Skin folder not found: " + dir); return; }
+
+            foreach (var s in Styles)
+            {
+                var set = s.Custom;
+                set.Digits = LoadDigits(dir, s.Prefix);
+                set.Miss = LoadFile(dir, s.Prefix + "_miss.png");
+                set.Plus = LoadFile(dir, s.Prefix + "_plus.png");
+                set.DigitsBlack = LoadDigits(blackDir, s.Prefix);
+                set.MissBlack = LoadFile(blackDir, s.Prefix + "_miss.png");
+            }
+            var fx = LoadFile(dir, "crit_effect.png");
+            if (fx != null) _burstSprite = fx;
+            MapleCombatTextPlugin.Info("Loaded skin '" + skin + "' from " + dir);
+        }
+
+        private static Sprite[] LoadDigits(string dir, string prefix)
         {
             var digits = new Sprite[10];
             for (int d = 0; d < 10; d++)
-                if ((digits[d] = LoadSprite(read(folder, $"{prefix}_{d}.png"), $"{folder}/{prefix}_{d}.png")) == null) return null;
+                if ((digits[d] = LoadFile(dir, $"{prefix}_{d}.png")) == null) return null;
             return digits;
+        }
+
+        private static Sprite LoadFile(string dir, string file)
+        {
+            var path = Path.Combine(dir, file);
+            return File.Exists(path) ? LoadSprite(File.ReadAllBytes(path), path) : null;
         }
 
         private static Sprite LoadSprite(byte[] bytes, string name)
@@ -273,13 +330,24 @@ namespace MapleCombatText
         public static bool Spawn(int dmg, bool crit, Transform target, bool mine, DmgPop source = null)
         {
             if (dmg <= 0 && !Cfg.ShowMiss) return false;
-            EnsureCanvas();
-            EnsureAssets(source);
-            if (_font == null) return false;
-
             bool taken = target.name == "Player" ||
                          (Cfg.AlliesUseTakenColor && target.GetComponent<SimPlayer>() != null);
             var style = taken ? Style.Taken : (crit && dmg > 0 ? Style.Crit : Style.Normal);
+            return Show(style, dmg > 0 ? dmg.ToString() : null, target, mine, source);
+        }
+
+        public static bool SpawnHeal(int amount, bool crit, Transform target, bool mine)
+        {
+            if (amount <= 0) return false;
+            string s = amount.ToString();
+            return Show(Style.Heal, Cfg.HealPlusSign ? "+" + s : s, target, mine, null, crit);
+        }
+
+        // text: digits (optionally starting with '+'), or null for MISS.
+        private static bool Show(Style style, string text, Transform target, bool mine, DmgPop source, bool bigPop = false)
+        {
+            EnsureCanvas();
+            EnsureAssets(source);
             var def = Styles[(int)style];
 
             float size = def.Size * Cfg.Scale;
@@ -287,42 +355,45 @@ namespace MapleCombatText
             bool others = !mine && target.name != "Player";
             if (others) size *= Cfg.OthersScale;
 
+            // Which look: built-in bubbly glyphs, a custom skin, or the game font.
+            bool maple = Cfg.MapleDigits && Maple.Complete;
+            bool custom = !maple && (text != null ? def.Custom.CurDigits != null : def.Custom.CurMiss != null);
+            if (!maple && !custom && _font == null) return false;
+
             var p = Get();
             p.Active = true;
             p.Age = 0f;
             p.World = HeadPosition(target);
-            p.PopScale = style == Style.Crit ? 1.75f : 1.45f;
+            p.PopScale = style == Style.Crit || bigPop ? 1.75f : 1.45f;
             p.BaseAlpha = others ? Cfg.OthersOpacity : 1f;
             p.TargetId = target.GetInstanceID();
             p.Slot = NextSlot(p, p.TargetId);
             p.StackOffset = p.Slot * size * 1.05f;
             p.Root.SetAsLastSibling();
 
-            string digits = dmg > 0 ? dmg.ToString() : null;
-            bool useImages = digits != null ? def.CurDigits != null : def.CurMiss != null;
-            float firstDigitCenterX, firstDigitHeight;
-
-            if (useImages)
+            GetColors(style, out var top, out var bottom);
+            float firstX, firstH;
+            if (maple || custom)
             {
                 p.Text.gameObject.SetActive(false);
                 p.ImageRow.gameObject.SetActive(true);
-                LayoutImages(p, def, digits, size, out firstDigitCenterX, out firstDigitHeight);
+                LayoutImages(p, def, text, size, maple, top, bottom, OutlineFor(style), out firstX, out firstH);
             }
             else
             {
                 p.ImageRow.gameObject.SetActive(false);
                 p.Text.gameObject.SetActive(true);
-                LayoutText(p, def, digits, size, out firstDigitCenterX, out firstDigitHeight);
+                LayoutText(p, def, text, size, top, bottom, out firstX, out firstH);
             }
 
             bool burst = style == Style.Crit && _burstSprite != null && Cfg.CritBurst;
             p.Burst.gameObject.SetActive(burst);
             if (burst)
             {
-                float bs = firstDigitHeight * 2.1f;
+                float bs = firstH * 2.1f;
                 p.Burst.sprite = _burstSprite;
                 p.Burst.rectTransform.sizeDelta = new Vector2(bs, bs);
-                p.Burst.rectTransform.anchoredPosition = new Vector2(firstDigitCenterX - size * 0.15f, firstDigitHeight * 0.55f);
+                p.Burst.rectTransform.anchoredPosition = new Vector2(firstX - size * 0.15f, firstH * 0.55f);
                 p.Burst.rectTransform.localEulerAngles = new Vector3(0, 0, UnityEngine.Random.Range(-15f, 15f));
             }
 
@@ -330,29 +401,32 @@ namespace MapleCombatText
             return true;
         }
 
-        private static void LayoutText(Popup p, StyleDef def, string digits, float size, out float firstX, out float firstH)
+        private static void LayoutText(Popup p, StyleDef def, string text, float size, Color top, Color bottom, out float firstX, out float firstH)
         {
             var t = p.Text;
             t.font = _font;
             if (def.Mat != null) t.fontSharedMaterial = def.Mat;
             t.fontSize = size;
             t.enableVertexGradient = true;
-            t.colorGradient = new VertexGradient(def.Top, def.Top, def.Bottom, def.Bottom);
+            t.colorGradient = new VertexGradient(top, top, bottom, bottom);
 
             Sb.Length = 0;
             Sb.Append("<cspace=-0.07em>");
-            if (digits == null)
+            if (text == null)
             {
                 Sb.Append("MISS");
             }
             else
             {
                 // MapleStory look: first digit bigger, the rest zig-zag slightly up/down.
-                for (int i = 0; i < digits.Length; i++)
+                bool first = true;
+                for (int i = 0; i < text.Length; i++)
                 {
-                    if (i == 0) Sb.Append("<size=122%>").Append(digits[0]).Append("</size>");
-                    else if ((i & 1) == 1) Sb.Append("<voffset=0.07em>").Append(digits[i]).Append("</voffset>");
-                    else Sb.Append(digits[i]);
+                    char ch = text[i];
+                    if (ch == '+') { Sb.Append("<size=85%>+</size>"); continue; }
+                    if (first) { Sb.Append("<size=122%>").Append(ch).Append("</size>"); first = false; }
+                    else if ((i & 1) == 1) Sb.Append("<voffset=0.07em>").Append(ch).Append("</voffset>");
+                    else Sb.Append(ch);
                 }
             }
             t.text = Sb.ToString();
@@ -369,52 +443,104 @@ namespace MapleCombatText
             }
         }
 
-        private const float Overlap = 0.80f; // fraction of a digit's width before the next starts
+        private const float Overlap = 0.80f; // fraction of a glyph's width before the next starts
 
-        private static void LayoutImages(Popup p, StyleDef def, string digits, float size, out float firstX, out float firstH)
+        private static void LayoutImages(Popup p, StyleDef def, string text, float size, bool maple,
+            Color top, Color bottom, Color outline, out float firstX, out float firstH)
         {
-            int count = digits == null ? 1 : digits.Length;
-            while (p.Images.Count < count)
-            {
-                var go = new GameObject("d", typeof(RectTransform), typeof(Image));
-                go.transform.SetParent(p.ImageRow, false);
-                var img = go.GetComponent<Image>();
-                img.raycastTarget = false;
-                img.rectTransform.pivot = new Vector2(0.5f, 0f);
-                p.Images.Add(img);
-            }
+            // Resolve each character to a glyph index (0-9, Miss, Plus); skip '+' if a custom skin has none.
+            var idx = new List<int>(12);
+            if (text == null) idx.Add(MapleGlyphs.Miss);
+            else
+                foreach (char ch in text)
+                {
+                    if (ch == '+') { if (maple || def.Custom.Plus != null) idx.Add(MapleGlyphs.Plus); }
+                    else idx.Add(ch - '0');
+                }
 
+            int count = idx.Count;
+            while (p.Glyphs.Count < count) p.Glyphs.Add(NewGlyph(p.ImageRow));
+
+            int firstDigit = idx.FindIndex(g => g < 10);
+            bool multi = count - (idx.Contains(MapleGlyphs.Plus) ? 1 : 0) > 1;
             float h = size * 1.05f;
             var widths = new float[count];
             var heights = new float[count];
             float total = 0f;
             for (int i = 0; i < count; i++)
             {
-                var sp = digits == null ? def.CurMiss : def.CurDigits[digits[i] - '0'];
-                var img = p.Images[i];
-                img.sprite = sp;
-                heights[i] = h * (i == 0 && digits != null && count > 1 ? 1.2f : 1f);
-                widths[i] = heights[i] * sp.rect.width / Mathf.Max(1f, sp.rect.height);
+                int g = idx[i];
+                Sprite face = maple ? Maple.Face[g]
+                    : g == MapleGlyphs.Miss ? def.Custom.CurMiss
+                    : g == MapleGlyphs.Plus ? def.Custom.Plus
+                    : def.Custom.CurDigits[g];
+                var gl = p.Glyphs[i];
+                gl.Face.sprite = face;
+                gl.Face.color = Color.white;
+                gl.Grad.enabled = maple;
+                gl.Line.gameObject.SetActive(maple);
+                gl.Gloss.gameObject.SetActive(maple);
+                if (maple)
+                {
+                    gl.Line.sprite = Maple.Line[g];
+                    gl.Line.color = outline;
+                    gl.Gloss.sprite = Maple.Gloss[g];
+                    gl.Grad.Top = top;
+                    gl.Grad.Bottom = bottom;
+                    gl.Face.SetVerticesDirty();
+                }
+
+                float scale = g == MapleGlyphs.Plus ? 0.8f : (i == firstDigit && multi ? 1.2f : 1f);
+                heights[i] = h * scale;
+                widths[i] = heights[i] * face.rect.width / Mathf.Max(1f, face.rect.height);
                 total += widths[i] * (i == count - 1 ? 1f : Overlap);
             }
 
             float x = -total * 0.5f;
-            firstX = 0f; firstH = heights[0];
-            for (int i = 0; i < p.Images.Count; i++)
+            firstX = 0f; firstH = heights[Mathf.Max(0, firstDigit)];
+            for (int i = 0; i < p.Glyphs.Count; i++)
             {
-                var img = p.Images[i];
+                var gl = p.Glyphs[i];
                 bool on = i < count;
-                img.gameObject.SetActive(on);
+                gl.Rt.gameObject.SetActive(on);
                 if (!on) continue;
-                var rt = img.rectTransform;
-                rt.sizeDelta = new Vector2(widths[i], heights[i]);
+                int g = idx[i];
+                bool digit = g < 10;
+                gl.Rt.sizeDelta = new Vector2(widths[i], heights[i]);
                 float cx = x + widths[i] * 0.5f;
-                rt.anchoredPosition = new Vector2(cx, (i & 1) == 1 ? h * 0.09f : 0f);
+                float y = g == MapleGlyphs.Plus ? h * 0.12f : (digit && (i & 1) == 1 ? h * 0.09f : 0f);
+                gl.Rt.anchoredPosition = new Vector2(cx, y);
                 // MapleStory digits lean back and forth a little.
-                rt.localEulerAngles = new Vector3(0f, 0f, digits == null ? 0f : ((i & 1) == 1 ? -5f : 4f));
-                if (i == 0) firstX = cx;
+                gl.Rt.localEulerAngles = new Vector3(0f, 0f, digit ? ((i & 1) == 1 ? -5f : 4f) : 0f);
+                if (i == firstDigit) firstX = cx;
                 x += widths[i] * Overlap;
             }
+        }
+
+        private static Glyph NewGlyph(RectTransform row)
+        {
+            var go = new GameObject("g", typeof(RectTransform));
+            go.transform.SetParent(row, false);
+            var gl = new Glyph { Rt = (RectTransform)go.transform };
+            gl.Rt.pivot = new Vector2(0.5f, 0f);
+            gl.Line = NewLayer(gl.Rt, "line");
+            gl.Face = NewLayer(gl.Rt, "face");
+            gl.Gloss = NewLayer(gl.Rt, "gloss");
+            gl.Grad = gl.Face.gameObject.AddComponent<VGradient>();
+            return gl;
+        }
+
+        private static Image NewLayer(RectTransform parent, string name)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = rt.offsetMax = Vector2.zero;
+            var img = go.GetComponent<Image>();
+            img.raycastTarget = false;
+            return img;
         }
 
         // MapleStory-style stacking: a new line goes into the lowest slot on this target that isn't
@@ -503,7 +629,7 @@ namespace MapleCombatText
         {
             if (_canvas == null) return;
             _canvas.sortingOrder = Mathf.RoundToInt(Cfg.SortOrder);
-            if (_assetsReady && Cfg.BlackOutline != _appliedBlackOutline) ApplyOutlineColors();
+            if (_assetsReady) RefreshMaterials();
             var cam = Cam();
             float dt = Time.unscaledDeltaTime;
             float hold = Cfg.HoldTime, fade = Mathf.Max(0.05f, Cfg.FadeTime);

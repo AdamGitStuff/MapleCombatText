@@ -194,50 +194,78 @@ namespace MapleCombatText
         // plugins/MapleCombatText/skins/<Skin>/normal_0..9.png, crit_0..9.png, taken_0..9.png,
         // normal_miss.png, taken_miss.png, crit_effect.png  (any subset)
         // If a sibling folder "<Skin>Black" exists it is used while BlackOutline is on.
+        // Built-in "Maple" digits are embedded in the DLL (resources skins/Maple/*.png and skins/MapleBlack/*.png),
+        // so the mod is a single file. A custom Skin is read from plugins/MapleCombatText/skins/<Skin>/.
+        // If a sibling "<name>Black" set exists it is used while BlackOutline is on.
         private static void LoadSkin(string skin, bool builtIn)
         {
             if (string.IsNullOrWhiteSpace(skin)) return;
-            string root = Path.Combine(Path.Combine(Path.Combine(Path.GetDirectoryName(Application.dataPath), "plugins"), "MapleCombatText"), "skins");
-            string dir = Path.Combine(root, skin.Trim());
-            if (!Directory.Exists(dir)) { MapleCombatTextPlugin.Warn((builtIn ? "Built-in Maple digits missing: " : "Skin folder not found: ") + dir); return; }
-            string blackDir = Path.Combine(root, skin.Trim() + "Black");
+            skin = skin.Trim();
+            Func<string, string, byte[]> read;
+            string where;
+            if (builtIn)
+            {
+                read = ReadResource;
+                where = "embedded resources";
+            }
+            else
+            {
+                string root = Path.Combine(Path.Combine(Path.Combine(Path.GetDirectoryName(Application.dataPath), "plugins"), "MapleCombatText"), "skins");
+                if (!Directory.Exists(Path.Combine(root, skin))) { MapleCombatTextPlugin.Warn("Skin folder not found: " + Path.Combine(root, skin)); return; }
+                read = (folder, file) => { var f = Path.Combine(Path.Combine(root, folder), file); return File.Exists(f) ? File.ReadAllBytes(f) : null; };
+                where = root;
+            }
 
+            string black = skin + "Black";
+            bool hasBlack = false;
             string[] prefixes = { "normal", "crit", "taken" };
             for (int s = 0; s < 3; s++)
             {
                 var set = builtIn ? Styles[s].Maple : Styles[s].Custom;
-                set.Digits = LoadDigits(dir, prefixes[s]);
-                set.Miss = LoadSprite(Path.Combine(dir, $"{prefixes[s]}_miss.png"));
-                if (Directory.Exists(blackDir))
-                {
-                    set.DigitsBlack = LoadDigits(blackDir, prefixes[s]);
-                    set.MissBlack = LoadSprite(Path.Combine(blackDir, $"{prefixes[s]}_miss.png"));
-                }
+                set.Digits = LoadDigits(read, skin, prefixes[s]);
+                set.Miss = LoadSprite(read(skin, $"{prefixes[s]}_miss.png"), skin + "/" + prefixes[s] + "_miss.png");
+                set.DigitsBlack = LoadDigits(read, black, prefixes[s]);
+                set.MissBlack = LoadSprite(read(black, $"{prefixes[s]}_miss.png"), black + "/" + prefixes[s] + "_miss.png");
+                hasBlack |= set.DigitsBlack != null;
             }
-            if (builtIn) return;
-            var fx = LoadSprite(Path.Combine(dir, "crit_effect.png"));
-            if (fx != null) _burstSprite = fx;
-            MapleCombatTextPlugin.Info("Loaded skin '" + skin + "' from " + dir + (Directory.Exists(blackDir) ? " (+ black outline variant)" : ""));
+            if (Styles[0].Maple.Digits == null && builtIn) MapleCombatTextPlugin.Warn("Built-in Maple digits missing from the DLL.");
+            if (!builtIn)
+            {
+                var fx = LoadSprite(read(skin, "crit_effect.png"), skin + "/crit_effect.png");
+                if (fx != null) _burstSprite = fx;
+            }
+            MapleCombatTextPlugin.Info("Loaded skin '" + skin + "' from " + where + (hasBlack ? " (+ black outline variant)" : ""));
         }
 
-        private static Sprite[] LoadDigits(string dir, string prefix)
+        private static byte[] ReadResource(string folder, string file)
+        {
+            using (var st = typeof(MapleText).Assembly.GetManifestResourceStream("skins/" + folder + "/" + file))
+            {
+                if (st == null) return null;
+                var ms = new MemoryStream();
+                st.CopyTo(ms);
+                return ms.ToArray();
+            }
+        }
+
+        private static Sprite[] LoadDigits(Func<string, string, byte[]> read, string folder, string prefix)
         {
             var digits = new Sprite[10];
             for (int d = 0; d < 10; d++)
-                if ((digits[d] = LoadSprite(Path.Combine(dir, $"{prefix}_{d}.png"))) == null) return null;
+                if ((digits[d] = LoadSprite(read(folder, $"{prefix}_{d}.png"), $"{folder}/{prefix}_{d}.png")) == null) return null;
             return digits;
         }
 
-        private static Sprite LoadSprite(string path)
+        private static Sprite LoadSprite(byte[] bytes, string name)
         {
-            if (!File.Exists(path)) return null;
+            if (bytes == null) return null;
             try
             {
                 var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
-                if (!tex.LoadImage(File.ReadAllBytes(path))) return null;
+                if (!tex.LoadImage(bytes)) return null;
                 return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0f), 100f);
             }
-            catch (Exception e) { MapleCombatTextPlugin.Warn($"Bad skin image {path}: {e.Message}"); return null; }
+            catch (Exception e) { MapleCombatTextPlugin.Warn($"Bad skin image {name}: {e.Message}"); return null; }
         }
 
         // ---------------------------------------------------------------- spawning

@@ -38,6 +38,12 @@
     <Reference Include="0Harmony"><HintPath>lib\0Harmony.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 
+  <!-- Built-in Maple digit images live inside the DLL so the mod ships as a single file. -->
+  <ItemGroup>
+    <EmbeddedResource Include="skins\Maple\*.png" LogicalName="skins/Maple/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="skins\MapleBlack\*.png" LogicalName="skins/MapleBlack/%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <!-- Copy the built plugin straight into the game's Lunaris plugins folder. -->
   <Target Name="DeployToGame" AfterTargets="Build" Condition="Exists('$(GameDir)\plugins')">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\plugins" />

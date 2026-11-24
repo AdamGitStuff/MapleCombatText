@@ -14,7 +14,7 @@ Replaces Erenshor's damage popups (`DmgPop.LoadInfo`) with MapleStory-style comb
 
 1. Install Lunaris for Erenshor (the plugin loader).
 2. Download `MapleCombatText-v1.0.0.zip` from the Releases page.
-3. Unzip it into `<Erenshor>\plugins\` so you have `plugins\MapleCombatText.dll` and `plugins\MapleCombatText\skins\...`.
+3. Put `MapleCombatText.dll` in `<Erenshor>\plugins\`. It is a single file; the digit images are built in.
 4. Start the game. Settings are in the Lunaris config UI under MapleCombatText.
 
 ## Building from source
@@ -43,7 +43,7 @@ Toggle with the **MapleDigits** setting (on by default, switches instantly). Off
 
 `tools/make_skin.py` generates MapleStory-style bubbly digits (Comic Sans Bold, fattened and rounded, glossy gradient, dark outline):
 
-    python tools/make_skin.py "<Erenshor>\plugins\MapleCombatText\skins\Maple"
-    python tools/make_skin.py "<Erenshor>\plugins\MapleCombatText\skins\MapleBlack" --black
+    python tools/make_skin.py skins/Maple
+    python tools/make_skin.py skins/MapleBlack --black
 
-A `<Skin>Black` folder next to the skin is used automatically while **BlackOutline** is on.
+The PNGs in `skins/` are embedded into the DLL at build time. For your own custom Skin folder, a `<Skin>Black` folder next to it is used automatically while **BlackOutline** is on.

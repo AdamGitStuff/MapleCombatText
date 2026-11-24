@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>MapleCombatText</AssemblyName>
+    <RootNamespace>MapleCombatText</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <Version>1.0.0</Version>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DebugType>none</DebugType>
+
+    <GameDir Condition="'$(GameDir)' == ''">D:\SteamLibrary\steamapps\common\Erenshor</GameDir>
+    <Managed>$(GameDir)\Erenshor_Data\Managed</Managed>
+
+    <!-- Compile against the game's own Mono BCL instead of a .NET Framework targeting pack. -->
+    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+    <FrameworkPathOverride>$(Managed)</FrameworkPathOverride>
+    <NoStdLib>true</NoStdLib>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="mscorlib"><HintPath>$(Managed)\mscorlib.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="System"><HintPath>$(Managed)\System.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="System.Core"><HintPath>$(Managed)\System.Core.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="netstandard"><HintPath>$(Managed)\netstandard.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Assembly-CSharp"><HintPath>$(Managed)\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(Managed)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UIModule"><HintPath>$(Managed)\UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UI"><HintPath>$(Managed)\UnityEngine.UI.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(Managed)\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.TextCoreFontEngineModule"><HintPath>$(Managed)\UnityEngine.TextCoreFontEngineModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(Managed)\UnityEngine.ImageConversionModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(Managed)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.TextMeshPro"><HintPath>$(Managed)\Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Lunaris"><HintPath>$(GameDir)\Lunaris.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>lib\0Harmony.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+
+  <!-- Copy the built plugin straight into the game's Lunaris plugins folder. -->
+  <Target Name="DeployToGame" AfterTargets="Build" Condition="Exists('$(GameDir)\plugins')">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\plugins" />
+    <Message Importance="high" Text="Deployed $(TargetFileName) -> $(GameDir)\plugins" />
+  </Target>
+
+</Project>

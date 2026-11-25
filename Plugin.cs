@@ -21,6 +21,10 @@ namespace MapleCombatText
         public bool ShowHealing = true;
 
         [ConfigSection("General")]
+        [ConfigDescription("Only show healing you did yourself (your heal spells, heal-over-time and lifesteal). Hides heals from your party, raid and anyone else, including heals they cast on you.")]
+        public bool OnlyMyHealing = false;
+
+        [ConfigSection("General")]
         [ConfigDescription("Put a '+' in front of healing numbers.")]
         public bool HealPlusSign = true;
 
@@ -199,15 +203,17 @@ namespace MapleCombatText
 
         private static void HealPrefix(Stats __instance, out int __state) { __state = __instance != null ? __instance.CurrentHP : 0; }
 
+        // HealMe(int): lifesteal / caster self-heals, so the healed character is the one who did it.
         private static void HealPostfix(Stats __instance, int __state)
         {
-            if (_tickDepth == 0) ShowHeal(__instance, __state, false, null);
+            if (_tickDepth == 0 && __instance != null) ShowHeal(__instance, __state, false, IsPlayer(__instance.Myself) || __instance == GameData.PlayerStats);
         }
 
         // HealMe(Spell spell, int amt, bool isCrit, bool isMana, Character source)
         private static void HealSpellPostfix(Stats __instance, int __state, bool __2, Character __4)
         {
-            if (_tickDepth == 0) ShowHeal(__instance, __state, __2, __4);
+            if (_tickDepth == 0 && __instance != null)
+                ShowHeal(__instance, __state, __2, __4 != null ? IsPlayer(__4) : __instance == GameData.PlayerStats);
         }
 
         private static void TickPrefix(Stats __instance, out int __state) { _tickDepth++; __state = __instance != null ? __instance.CurrentHP : 0; }
@@ -215,18 +221,40 @@ namespace MapleCombatText
         private static void TickPostfix(Stats __instance, int __state)
         {
             _tickDepth = Mathf.Max(0, _tickDepth - 1);
-            ShowHeal(__instance, __state, false, null);
+            if (__instance != null) ShowHeal(__instance, __state, false, HasPlayerEffect(__instance));
         }
 
-        private static void ShowHeal(Stats st, int before, bool crit, Character source)
+        private static bool IsPlayer(Character c)
+        {
+            if (c == null) return false;
+            var ps = GameData.PlayerStats;
+            return ps != null && (c == ps.Myself || c.gameObject == ps.gameObject);
+        }
+
+        // A heal-over-time tick counts as yours if one of the target's effects was cast by you.
+        private static bool HasPlayerEffect(Stats st)
+        {
+            try
+            {
+                var fx = st.StatusEffects;
+                if (fx == null) return false;
+                foreach (var e in fx)
+                    if (e != null && e.Effect != null && (e.fromPlayer || IsPlayer(e.Owner))) return true;
+            }
+            catch { }
+            return false;
+        }
+
+        private static void ShowHeal(Stats st, int before, bool crit, bool byMe)
         {
             if (!Cfg.Enabled || !Cfg.ShowHealing || st == null) return;
+            if (Cfg.OnlyMyHealing && !byMe) return;
             try
             {
                 int healed = st.CurrentHP - before;
                 if (healed <= 0) return;
                 var target = st.transform;
-                bool mine = target.name == "Player" || source == null || source.transform.name == "Player";
+                bool mine = byMe || st == GameData.PlayerStats; // others' heals use the smaller OthersScale look
                 MapleText.SpawnHeal(healed, crit, target, mine);
             }
             catch (Exception e) { Error("Heal popup failed: " + e.Message); }

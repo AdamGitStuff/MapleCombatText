@@ -7,7 +7,7 @@ Replaces Erenshor's damage popups (`DmgPop.LoadInfo`) with MapleStory-style comb
 - Damage you take: violet digits
 - `MISS` for 0-damage hits
 - Healing numbers (green, with a `+`) for heal spells, lifesteal and heal-over-time; natural regen is not shown
-- **ShowDamage** / **ShowHealing** switches to hide either kind, and **OnlyMyHealing** to hide party/raid heals
+- **ShowDamage** / **ShowHealing** switches to hide either kind, **OnlyMyHealing** to hide party/raid heals, and **HideAllyDamageTaken** to hide the damage party/raid members take
 - **Colors** section with a colour picker for the top and bottom of each number type (damage, crit, taken, healing)
 - Optional black outline (**BlackOutline** setting) instead of the default tinted brown/red/purple outline
 - Pop-in, short hold, then float up and fade

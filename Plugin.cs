@@ -17,6 +17,10 @@ namespace MapleCombatText
         public bool ShowDamage = true;
 
         [ConfigSection("General")]
+        [ConfigDescription("Hide the damage your party and raid members (sims) take, so the only damage-taken numbers are your own.")]
+        public bool HideAllyDamageTaken = false;
+
+        [ConfigSection("General")]
         [ConfigDescription("Show healing numbers when anyone is healed (spells, lifesteal, heal-over-time).")]
         public bool ShowHealing = true;
 
@@ -273,7 +277,7 @@ namespace MapleCombatText
             {
                 bool mine = _involvesPlayer;
                 _involvesPlayer = true;
-                if (!Cfg.ShowDamage)
+                if (!Cfg.ShowDamage || (Cfg.HideAllyDamageTaken && __3.name != "Player" && __3.GetComponent<SimPlayer>() != null))
                 {
                     if (__instance != null) __instance.gameObject.SetActive(false);
                     return false;
